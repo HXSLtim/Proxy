@@ -1908,8 +1908,79 @@ async function readUpstreamJson(upstreamResponse) {
   try {
     return { raw, json: JSON.parse(raw) };
   } catch {
+    const sseResponse = extractResponseObjectFromSse(raw);
+    if (sseResponse) {
+      return { raw, json: sseResponse };
+    }
     return { raw, json: null };
   }
+}
+
+function compactText(raw) {
+  return String(raw || "").replace(/\s+/g, " ").trim();
+}
+
+function clipText(raw, max = 280) {
+  const t = compactText(raw);
+  if (t.length <= max) return t;
+  return `${t.slice(0, max)}...`;
+}
+
+function buildNonJsonUpstreamMessage(raw) {
+  const text = String(raw || "");
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const data = trimmed.slice(5).trim();
+    if (!data || data === "[DONE]") continue;
+    const parsed = safeJsonParse(data, null);
+    const msg =
+      parsed?.error?.message ||
+      parsed?.message ||
+      parsed?.response?.error?.message ||
+      (typeof parsed === "string" ? parsed : "");
+    if (typeof msg === "string" && msg.trim().length > 0) {
+      return `Upstream returned non-JSON envelope: ${clipText(msg)}`;
+    }
+  }
+
+  const snippet = clipText(text);
+  if (snippet) return `Upstream returned non-JSON response: ${snippet}`;
+  return "Upstream returned invalid JSON";
+}
+
+function extractResponseObjectFromSse(raw) {
+  const text = String(raw || "");
+  if (!text.includes("data:")) return null;
+
+  const blocks = text.split(/\r?\n\r?\n/);
+  let found = null;
+  for (const block of blocks) {
+    if (!block) continue;
+    const lines = block.split(/\r?\n/);
+    const dataLines = [];
+    for (const line of lines) {
+      if (!line.startsWith("data:")) continue;
+      dataLines.push(line.slice(5).trimStart());
+    }
+    if (!dataLines.length) continue;
+
+    const joined = dataLines.join("\n").trim();
+    if (!joined || joined === "[DONE]") continue;
+    const parsed = safeJsonParse(joined, null);
+    if (!parsed || typeof parsed !== "object") continue;
+
+    if (parsed.object === "response") {
+      found = parsed;
+      continue;
+    }
+
+    if (parsed.response && typeof parsed.response === "object" && parsed.response.object === "response") {
+      found = parsed.response;
+    }
+  }
+  return found;
 }
 
 function resolveResponsesTarget(req) {
@@ -1981,9 +2052,10 @@ async function handleChatCompletions(req, res) {
     return;
   }
 
-  const { json } = await readUpstreamJson(upstreamResponse);
+  const { raw, json } = await readUpstreamJson(upstreamResponse);
   if (json === null) {
-    writeJson(res, 502, createError(502, "Upstream returned invalid JSON", "api_error"));
+    const status = upstreamResponse.ok ? 502 : upstreamResponse.status || 502;
+    writeJson(res, status, createError(status, buildNonJsonUpstreamMessage(raw), "api_error"));
     return;
   }
 
@@ -2021,9 +2093,10 @@ async function handleModels(req, res) {
     return;
   }
 
-  const { json } = await readUpstreamJson(upstreamResponse);
+  const { raw, json } = await readUpstreamJson(upstreamResponse);
   if (json === null) {
-    writeJson(res, 502, createError(502, "Upstream returned invalid JSON", "api_error"));
+    const status = upstreamResponse.ok ? 502 : upstreamResponse.status || 502;
+    writeJson(res, status, createError(status, buildNonJsonUpstreamMessage(raw), "api_error"));
     return;
   }
 
@@ -2094,9 +2167,10 @@ async function handleMessages(req, res) {
     return;
   }
 
-  const { json } = await readUpstreamJson(upstreamResponse);
+  const { raw, json } = await readUpstreamJson(upstreamResponse);
   if (json === null) {
-    writeJson(res, 502, createAnthropicError("Upstream returned invalid JSON", "api_error"));
+    const status = upstreamResponse.ok ? 502 : upstreamResponse.status || 502;
+    writeJson(res, status, createAnthropicError(buildNonJsonUpstreamMessage(raw), "api_error"));
     return;
   }
 
@@ -2183,9 +2257,10 @@ async function handleResponses(req, res) {
       return;
     }
 
-    const { json } = await readUpstreamJson(upstreamResponse);
+    const { raw, json } = await readUpstreamJson(upstreamResponse);
     if (json === null) {
-      writeJson(res, 502, createError(502, "Upstream returned invalid JSON", "api_error"));
+      const status = upstreamResponse.ok ? 502 : upstreamResponse.status || 502;
+      writeJson(res, status, createError(status, buildNonJsonUpstreamMessage(raw), "api_error"));
       return;
     }
 
@@ -2247,9 +2322,10 @@ async function handleResponses(req, res) {
       return;
     }
 
-    const { json } = await readUpstreamJson(upstreamResponse);
+    const { raw, json } = await readUpstreamJson(upstreamResponse);
     if (json === null) {
-      writeJson(res, 502, createError(502, "Upstream returned invalid JSON", "api_error"));
+      const status = upstreamResponse.ok ? 502 : upstreamResponse.status || 502;
+      writeJson(res, status, createError(status, buildNonJsonUpstreamMessage(raw), "api_error"));
       return;
     }
 
@@ -2315,9 +2391,10 @@ async function handleResponses(req, res) {
     return;
   }
 
-  const { json } = await readUpstreamJson(upstreamResponse);
+  const { raw, json } = await readUpstreamJson(upstreamResponse);
   if (json === null) {
-    writeJson(res, 502, createError(502, "Upstream returned invalid JSON", "api_error"));
+    const status = upstreamResponse.ok ? 502 : upstreamResponse.status || 502;
+    writeJson(res, status, createError(status, buildNonJsonUpstreamMessage(raw), "api_error"));
     return;
   }
 
